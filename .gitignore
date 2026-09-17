@@ -1,0 +1,9 @@
+# Machine-specific configuration
+config.psd1
+
+# Navisworks models can be large and may contain project data
+*.nwd
+
+# Runtime files
+publishNWD.lock
+*.log
