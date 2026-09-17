@@ -149,7 +149,9 @@ function Save-PublisherConfig {
         ''
     ) -join "`r`n"
 
-    $temporaryPath = Join-Path $parent ('.config.{0}.tmp.psd1' -f [guid]::NewGuid().ToString('N'))
+    $operationId = [guid]::NewGuid().ToString('N')
+    $temporaryPath = Join-Path $parent ('.config.{0}.tmp.psd1' -f $operationId)
+    $backupPath = Join-Path $parent ('.config.{0}.backup.psd1' -f $operationId)
     try {
         $encoding = New-Object System.Text.UTF8Encoding($true)
         [System.IO.File]::WriteAllText($temporaryPath, $content, $encoding)
@@ -158,7 +160,7 @@ function Save-PublisherConfig {
         $null = Import-PublisherConfig -Path $temporaryPath
 
         if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-            [System.IO.File]::Replace($temporaryPath, $fullPath, $null)
+            [System.IO.File]::Replace($temporaryPath, $fullPath, $backupPath)
         }
         else {
             [System.IO.File]::Move($temporaryPath, $fullPath)
@@ -167,6 +169,9 @@ function Save-PublisherConfig {
     finally {
         if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
             Remove-Item -LiteralPath $temporaryPath -Force
+        }
+        if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+            Remove-Item -LiteralPath $backupPath -Force
         }
     }
 }
