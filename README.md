@@ -49,10 +49,12 @@ The configurator asks for:
 2. The folder containing source files.
 3. The source `.nwf` project.
 4. The destination `.nwd` path.
+5. The optional publisher log path.
 
 Press Enter at any prompt to keep the value currently stored in `config.psd1`.
 Existing input paths are validated. The output NWD does not need to exist, but
-its parent folder must exist.
+its parent folder must exist. Logging defaults to `publishNWD.log` next to
+`config.psd1`; enter `NONE` at the log prompt to disable it.
 
 ## Run
 
@@ -70,6 +72,18 @@ Otherwise, it exits without republishing. If the output NWD is located inside
 the source folder, it is excluded from the source-file comparison.
 
 The source-folder check is not recursive; files in nested folders are ignored.
+
+## Logging
+
+`LogPath` in `config.psd1` controls logging. Relative paths are resolved from
+the folder containing `config.psd1`, and an empty value disables logging:
+
+```powershell
+LogPath = 'publishNWD.log'
+```
+
+The log records the latest source, the publishing decision, the Navisworks
+exit code, successful completion, and errors. Log files are excluded from Git.
 
 ## Automation
 

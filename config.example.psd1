@@ -3,4 +3,5 @@
     SourceDirectory = 'C:\Path\To\Navisworks\Sources'
     SourceNwf       = 'C:\Path\To\Navisworks\Project.nwf'
     OutputNwd       = 'C:\Path\To\Published\Project.nwd'
+    LogPath         = 'publishNWD.log'
 }

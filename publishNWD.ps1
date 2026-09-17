@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:LogPath = $null
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $PSScriptRoot 'config.psd1'
@@ -32,6 +33,15 @@ function Import-PublisherConfig {
         if ($config[$name] -isnot [string]) {
             throw "Setting '$name' in $Path must be a string."
         }
+    }
+
+    if ($config.ContainsKey('LogPath')) {
+        if ($config.LogPath -isnot [string]) {
+            throw "Setting 'LogPath' in $Path must be a string."
+        }
+    }
+    else {
+        $config.LogPath = 'publishNWD.log'
     }
 
     return $config
@@ -110,6 +120,120 @@ function Read-ConfiguredPath {
     }
 }
 
+function Read-OptionalLogPath {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$CurrentValue,
+
+        [Parameter(Mandatory)]
+        [string]$BaseDirectory
+    )
+
+    while ($true) {
+        Write-Host ''
+        Write-Host 'Publisher log file' -ForegroundColor Cyan
+        $currentDisplay = if ([string]::IsNullOrWhiteSpace($CurrentValue)) {
+            'DISABLED'
+        }
+        else {
+            $CurrentValue
+        }
+        Write-Host "Current: $currentDisplay"
+        $answer = Read-Host 'New path (Enter to keep current, NONE to disable)'
+
+        if ([string]::IsNullOrWhiteSpace($answer)) {
+            return $CurrentValue
+        }
+
+        if ($answer.Trim() -ieq 'NONE') {
+            return ''
+        }
+
+        $candidate = $answer.Trim().Trim('"')
+        if ($candidate.Contains('"') -or $candidate.Contains("`r") -or $candidate.Contains("`n")) {
+            Write-Warning 'The path cannot contain a double quote or a line break.'
+            continue
+        }
+
+        if ([System.IO.Path]::GetExtension($candidate) -ine '.log') {
+            Write-Warning 'The log path must use the .log extension.'
+            continue
+        }
+
+        $resolvedPath = if ([System.IO.Path]::IsPathRooted($candidate)) {
+            [System.IO.Path]::GetFullPath($candidate)
+        }
+        else {
+            [System.IO.Path]::GetFullPath((Join-Path $BaseDirectory $candidate))
+        }
+        $parent = Split-Path -Parent $resolvedPath
+
+        if (Test-Path -LiteralPath $parent -PathType Container) {
+            return $candidate
+        }
+
+        Write-Warning "The log directory does not exist: $parent"
+    }
+}
+
+function Initialize-PublisherLog {
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Config,
+
+        [Parameter(Mandatory)]
+        [string]$ConfigFilePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Config.LogPath)) {
+        $script:LogPath = $null
+        return
+    }
+
+    if ([System.IO.Path]::GetExtension($Config.LogPath) -ine '.log') {
+        throw "LogPath must use the .log extension: $($Config.LogPath)"
+    }
+
+    $configDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ConfigFilePath))
+    $resolvedPath = if ([System.IO.Path]::IsPathRooted($Config.LogPath)) {
+        [System.IO.Path]::GetFullPath($Config.LogPath)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $configDirectory $Config.LogPath))
+    }
+
+    $logDirectory = Split-Path -Parent $resolvedPath
+    if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
+        throw "Log directory not found: $logDirectory"
+    }
+
+    $script:LogPath = $resolvedPath
+}
+
+function Write-PublisherLog {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message,
+
+        [ValidateSet('INFO', 'WARNING', 'ERROR')]
+        [string]$Level = 'INFO'
+    )
+
+    if (-not $script:LogPath) {
+        return
+    }
+
+    $line = '{0} [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
+    try {
+        Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Logging has been disabled because the log could not be written: $($_.Exception.Message)"
+        $script:LogPath = $null
+    }
+}
+
 function ConvertTo-Psd1String {
     param(
         [Parameter(Mandatory)]
@@ -145,6 +269,7 @@ function Save-PublisherConfig {
         "    SourceDirectory = $(ConvertTo-Psd1String $Config.SourceDirectory)"
         "    SourceNwf       = $(ConvertTo-Psd1String $Config.SourceNwf)"
         "    OutputNwd       = $(ConvertTo-Psd1String $Config.OutputNwd)"
+        "    LogPath         = $(ConvertTo-Psd1String $Config.LogPath)"
         '}'
         ''
     ) -join "`r`n"
@@ -191,6 +316,7 @@ function Invoke-Configurator {
             SourceDirectory = ''
             SourceNwf       = ''
             OutputNwd       = ''
+            LogPath         = 'publishNWD.log'
         }
     }
 
@@ -218,6 +344,9 @@ function Invoke-Configurator {
             -CurrentValue $current.OutputNwd `
             -Kind Output `
             -ExpectedExtension '.nwd'
+        LogPath = Read-OptionalLogPath `
+            -CurrentValue $current.LogPath `
+            -BaseDirectory (Split-Path -Parent ([System.IO.Path]::GetFullPath($Path)))
     }
 
     Save-PublisherConfig -Path $Path -Config $configured
@@ -292,6 +421,13 @@ function Invoke-NwdPublisher {
         'FILE DOES NOT EXIST'
     }
 
+    Write-PublisherLog -Message (
+        'Latest source: {0} ({1:o}); published NWD: {2}' -f `
+            $latestSource.FullName,
+            $latestSource.LastWriteTimeUtc,
+            $publishedTime
+    )
+
     Write-Host '============================================================'
     Write-Host "Latest source : $($latestSource.Name)"
     Write-Host "Modified      : $($latestSource.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
@@ -299,6 +435,7 @@ function Invoke-NwdPublisher {
     Write-Host '============================================================'
 
     if ($publishedNwd -and $publishedNwd.LastWriteTimeUtc -ge $latestSource.LastWriteTimeUtc) {
+        Write-PublisherLog -Message 'Published NWD is already up to date.'
         Write-Host ''
         Write-Host 'Published NWD is already up to date.' -ForegroundColor Green
         return
@@ -307,6 +444,7 @@ function Invoke-NwdPublisher {
     Write-Host ''
     Write-Host 'Publishing is required.' -ForegroundColor Yellow
     Write-Host ''
+    Write-PublisherLog -Message 'Publishing is required. Starting Navisworks.'
 
     $outputTimeBefore = if ($publishedNwd) {
         $publishedNwd.LastWriteTimeUtc
@@ -330,6 +468,8 @@ function Invoke-NwdPublisher {
         -Wait `
         -PassThru
 
+    Write-PublisherLog -Message "Navisworks exited with code $($navisworksProcess.ExitCode)."
+
     if ($navisworksProcess.ExitCode -ne 0) {
         throw "Navisworks publishing failed with exit code $($navisworksProcess.ExitCode)."
     }
@@ -349,6 +489,7 @@ function Invoke-NwdPublisher {
 
     Write-Host ''
     Write-Host 'Publishing completed successfully.' -ForegroundColor Green
+    Write-PublisherLog -Message "Publishing completed successfully: $($publishedAfter.FullName)"
 }
 
 try {
@@ -371,7 +512,10 @@ try {
 
         try {
             $config = Import-PublisherConfig -Path $ConfigPath
+            Initialize-PublisherLog -Config $config -ConfigFilePath $ConfigPath
+            Write-PublisherLog -Message 'Publisher started.'
             Invoke-NwdPublisher -Config $config
+            Write-PublisherLog -Message 'Publisher finished.'
         }
         finally {
             if ($lockStream) {
@@ -381,6 +525,7 @@ try {
     }
 }
 catch {
+    Write-PublisherLog -Message $_.Exception.Message -Level ERROR
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     exit 2
 }
